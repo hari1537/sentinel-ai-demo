@@ -1,0 +1,14 @@
+services:
+  - type: web
+    name: sentinel-ai-backend
+    runtime: node
+    region: oregon
+    buildCommand: cd backend && npm install
+    startCommand: cd backend && npm start
+    envVars:
+      - key: JWT_SECRET
+        value: my-secret-key-12345
+      - key: ENCRYPTION_SECRET
+        value: my-encryption-key-67890
+      - key: PORT
+        value: 5000
