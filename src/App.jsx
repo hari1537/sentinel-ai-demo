@@ -144,6 +144,49 @@ const Emails = {
   }
 };
 
+// ─── Access Key Engine (simulated storage & events) ──────────────────────
+const AccessKeyEngine = {
+  generate(ownerId, fileId, uses = 3) {
+    const keys = JSON.parse(localStorage.getItem("sentinel_keys")||"[]");
+    const key = `${hexStr(4)}-${hexStr(4)}-${hexStr(4)}`;
+    const obj = { id: Date.now()+rand(0,999), key, ownerId, fileId, usesRemaining: uses };
+    keys.unshift(obj);
+    localStorage.setItem("sentinel_keys", JSON.stringify(keys));
+    return obj;
+  },
+  getByKey(key) {
+    const keys = JSON.parse(localStorage.getItem("sentinel_keys")||"[]");
+    return keys.find(k=>k.key===key);
+  },
+  useKey(key, externalUserName="External User"){
+    const keys = JSON.parse(localStorage.getItem("sentinel_keys")||"[]");
+    const idx = keys.findIndex(k=>k.key===key);
+    if(idx===-1) return {ok:false,msg:"Invalid key"};
+    const k = keys[idx];
+    if(k.usesRemaining<=0) return {ok:false,msg:"Key exhausted"};
+    k.usesRemaining -= 1;
+    keys[idx]=k; localStorage.setItem("sentinel_keys",JSON.stringify(keys));
+
+    // create event
+    const ev = { id: Date.now()+rand(0,999), key:k.key, fileId:k.fileId, fileName:(MOCK_FILES.find(f=>f.id===k.fileId)||{}).name||"Unknown", ownerId:k.ownerId, time:Date.now(), ip:genIP(), device:genDevice(), loc:genLocation(), remaining:k.usesRemaining, externalUser:externalUserName, status:"Allowed" };
+    const evs = JSON.parse(localStorage.getItem("sentinel_key_events")||"[]"); evs.unshift(ev); localStorage.setItem("sentinel_key_events",JSON.stringify(evs));
+
+    // dispatch window event for real-time UI
+    try{ window.dispatchEvent(new CustomEvent('sentinel:keyUsed',{detail:ev})); }catch(e){}
+
+    // send owner email
+    const owner = (JSON.parse(localStorage.getItem("sentinel_users")||"[]")).find(u=>u.id===k.ownerId);
+    if(owner) EmailEngine.send(owner.email, "Your secure access key was just used", `Key ${k.key} used to access ${ev.fileName} at ${fmtDT(ev.time)} from ${ev.ip} (${ev.device}, ${ev.loc}). Remaining uses: ${k.usesRemaining}`);
+
+    return {ok:true,event:ev};
+  },
+  revoke(key){
+    const keys = JSON.parse(localStorage.getItem("sentinel_keys")||"[]");
+    const idx = keys.findIndex(k=>k.key===key); if(idx===-1) return false; keys[idx].usesRemaining=0; localStorage.setItem("sentinel_keys",JSON.stringify(keys)); return true;
+  },
+  list(){ return JSON.parse(localStorage.getItem("sentinel_keys")||"[]"); }
+};
+
 // ─── File Download Engine ────────────────────────────────────────────────
 const FileEngine = {
   download(file) {
@@ -362,6 +405,68 @@ function Modal({title,icon,onClose,children,wide=false}){
           <button className="close-btn" onClick={onClose}>✕</button>
         </div>
         <div className="modal-body">{children}</div>
+      </div>
+    </div>
+  );
+}
+
+function SimulateKeyModal({onClose}){
+  const [key,setKey]=useState("");
+  const [userName,setUserName]=useState("");
+  const [result,setResult]=useState(null);
+  const submit=()=>{
+    const res=AccessKeyEngine.useKey(key.trim(), userName||"External User");
+    setResult(res);
+  };
+  return(
+    <Modal title="Simulate Key Use" icon="🔑" onClose={onClose} wide>
+      <div style={{display:"flex",flexDirection:"column",gap:10}}>
+        <div style={{fontSize:".85rem",color:"var(--muted)"}}>Enter an encrypted access key to simulate external access.</div>
+        <input className="input" placeholder="ACCESS-KEY-XXX" value={key} onChange={e=>setKey(e.target.value)} />
+        <input className="input" placeholder="External user name (optional)" value={userName} onChange={e=>setUserName(e.target.value)} />
+        <div style={{display:"flex",gap:8}}>
+          <button className="btn btn-primary" onClick={submit}>SIMULATE ACCESS</button>
+          <button className="btn btn-ghost" onClick={onClose}>CLOSE</button>
+        </div>
+        {result&&(
+          <div style={{marginTop:8}}>
+            {result.ok? <div style={{color:"var(--neon)"}}>Success — event recorded.</div> : <div style={{color:"var(--red)"}}>{result.msg}</div>}
+          </div>
+        )}
+      </div>
+    </Modal>
+  );
+}
+
+function RealTimeAlertPopup({ev,onClose,onRevoke,onMarkSafe,onAllow}){
+  const severity = ev.remaining<=0?"Warning":"Info";
+  useEffect(()=>{
+    // subtle pulse sound via WebAudio
+    try{
+      const ctx = new (window.AudioContext||window.webkitAudioContext)();
+      const o = ctx.createOscillator(); const g = ctx.createGain();
+      o.type='sine'; o.frequency.value=520; g.gain.value=0.02; o.connect(g); g.connect(ctx.destination); o.start(); setTimeout(()=>{o.stop(); ctx.close();},220);
+    }catch(e){}
+  },[]);
+  return(
+    <div style={{position:"fixed",right:20,top:80,zIndex:1200,width:360}}>
+      <div className="glass" style={{padding:16,borderLeft:`4px solid ${severity==="Warning"?"#ffcc00":"#00ffaa"}`}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
+          <div><div style={{fontSize:"1.05rem",fontWeight:700}}>Secure Access Key Used</div><div style={{fontSize:".78rem",color:"var(--muted)"}}>{fmtDT(ev.time)}</div></div>
+          <div style={{fontSize:".9rem",color:severity==="Warning"?"#ffcc00":"#00ffaa"}}>{severity}</div>
+        </div>
+        <div style={{fontSize:".86rem",color:"var(--text)",marginBottom:8}}>
+          <div><strong>File:</strong> {ev.fileName}</div>
+          <div><strong>By:</strong> {ev.externalUser}</div>
+          <div><strong>From:</strong> {ev.ip} • {ev.device} • {ev.loc}</div>
+          <div><strong>Remaining uses:</strong> {ev.remaining}</div>
+          <div style={{marginTop:8,color:"var(--muted)"}}>Status: <strong style={{color:"var(--neon)"}}>{ev.status}</strong></div>
+        </div>
+        <div style={{display:"flex",gap:8}}>
+          <button className="btn btn-danger" onClick={()=>onRevoke(ev.key)}>Revoke Key</button>
+          <button className="btn btn-blue" onClick={()=>onAllow(ev)}>Allow</button>
+          <button className="btn btn-ghost" onClick={()=>onMarkSafe(ev)}>Mark Safe</button>
+        </div>
       </div>
     </div>
   );
@@ -603,6 +708,17 @@ function SignupPage({onSignup,onGoLogin}){
     const codes=genCodes();
     const user={id:Date.now(),name:form.name,email:form.email,password:form.password,org:form.org,files:MOCK_FILES,alerts:MOCK_ALERTS,joined:Date.now(),securityCodes:codes.map(c=>({code:c,used:false}))};
     users.push(user); localStorage.setItem("sentinel_users",JSON.stringify(users));
+
+    // generate access keys for the new user (client-side simulation)
+    // create 3 access keys mapped to the first mock file with 3 uses each
+    try{
+      for(let i=0;i<3;i++){ AccessKeyEngine.generate(user.id, MOCK_FILES[0].id, 3); }
+    }catch(e){}
+
+    // fetch generated keys for display
+    const aks = AccessKeyEngine.list().filter(k=>k.ownerId===user.id);
+    user.accessKeys = aks;
+
     Emails.welcomeEmail(form.name,form.email);
     setCreatedUser(user);
   };
@@ -628,6 +744,21 @@ function SignupPage({onSignup,onGoLogin}){
           </div>
         ))}
       </div>
+      {createdUser.accessKeys&&createdUser.accessKeys.length>0&&(
+        <div style={{marginBottom:18}}>
+          <div style={{fontSize:".73rem",color:"var(--muted)",letterSpacing:.8,marginBottom:8}}>YOUR ACCESS KEYS (for protected files)</div>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:7}}>
+            {createdUser.accessKeys.map((k,i)=> (
+              <div key={k.id} className="sec-code" style={{animationDelay:`${i*30}ms`}} onClick={()=>navigator.clipboard?.writeText(k.key)}>
+                <span style={{fontSize:".65rem",color:"var(--muted)",flexShrink:0,minWidth:16}}>{String(i+1).padStart(2,"0")}</span>
+                <span style={{flex:1}}>{k.key} <span style={{fontSize:".68rem",color:"var(--muted)",marginLeft:8}}>({k.usesRemaining} uses)</span></span>
+                <span style={{fontSize:".62rem",color:"var(--muted)"}}>⊕</span>
+              </div>
+            ))}
+          </div>
+          <div style={{fontSize:".72rem",color:"var(--muted)",marginTop:8}}>Click any key to copy. These keys grant access to protected files — share only with trusted parties.</div>
+        </div>
+      )}
       <div style={{background:"rgba(0,136,255,.06)",border:"1px solid rgba(0,136,255,.15)",borderRadius:8,padding:"11px 14px",marginBottom:18,fontSize:".8rem",color:"#88bbff",lineHeight:1.5}}>
         ℹ A welcome email has been sent to <strong style={{color:"var(--neon)"}}>{createdUser.email}</strong>. You can view it in the Inbox after login.
       </div>
@@ -856,7 +987,7 @@ function RiskGauge({score}){
 }
 
 // ─── Sidebar ──────────────────────────────────────────────────────────────
-function Sidebar({active,onNav,user,onLogout,unreadEmails}){
+function Sidebar({active,onNav,user,onLogout,unreadEmails,onSimulateOpen}){
   return(
     <div className="sidebar">
       <div style={{padding:"0 20px 18px",borderBottom:"1px solid var(--gb)"}}>
@@ -875,6 +1006,9 @@ function Sidebar({active,onNav,user,onLogout,unreadEmails}){
         <div style={{display:"flex",alignItems:"center",gap:9,marginBottom:10}}>
           <div style={{width:30,height:30,borderRadius:"50%",background:"linear-gradient(135deg,#00ffaa,#0088ff)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:".8rem",fontWeight:700,color:"#020b12",flexShrink:0}}>{user.name[0]}</div>
           <div style={{flex:1,minWidth:0}}><div style={{fontSize:".82rem",fontWeight:600,color:"var(--text)",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{user.name}</div><div style={{fontSize:".68rem",color:"var(--muted)",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{user.email}</div></div>
+        </div>
+        <div style={{display:"flex",gap:8,marginBottom:8}}>
+          <button className="btn btn-ghost" onClick={onSimulateOpen} style={{flex:1,fontSize:".74rem",padding:"7px"}}>Simulate Key Use</button>
         </div>
         <button className="btn btn-ghost" onClick={onLogout} style={{width:"100%",fontSize:".78rem",padding:"7px"}}>Sign Out</button>
       </div>
@@ -1387,6 +1521,8 @@ function SuspiciousBanner({onDismiss,onVerify}){
 export default function App(){
   const [screen,setScreen]=useState("login");
   const [user,setUser]=useState(null);
+  const [showSimulate,setShowSimulate]=useState(false);
+  const [realtimeAlerts,setRealtimeAlerts]=useState([]);
   const [page,setPage]=useState("dashboard");
   const [riskScore,setRiskScore]=useState(rand(14,32));
   const [behaviorEvents,setBehaviorEvents]=useState([]);
@@ -1403,8 +1539,25 @@ export default function App(){
     if(!users.find(u=>u.email==="demo@sentinel.ai")){
       const demo={id:1,name:"Alex Johnson",email:"demo@sentinel.ai",password:"demo123",org:"SentinelAI Corp",files:MOCK_FILES,alerts:MOCK_ALERTS,joined:Date.now()-864000000,securityCodes:DEMO_CODES.map(c=>({code:c,used:false}))};
       users.unshift(demo); localStorage.setItem("sentinel_users",JSON.stringify(users));
+      // create a demo access key for file 1
+      AccessKeyEngine.generate(demo.id, MOCK_FILES[0].id, 3);
     }
   },[]);
+
+  // Listen for key-used events dispatched by AccessKeyEngine
+  useEffect(()=>{
+    const h=(e)=>{
+      const ev=e.detail;
+      // attach to realtime popups
+      setRealtimeAlerts(prev=>[ev,...prev].slice(0,6));
+      // if the current logged in user is the owner, also add to session alerts
+      if(user&&user.id===ev.ownerId){
+        setSessionAlerts(prev=>[{desc:`Access key used on ${ev.fileName} by ${ev.externalUser}`,severity:"High",time:ev.time,status:"Active"},...prev]);
+      }
+    };
+    window.addEventListener('sentinel:keyUsed',h);
+    return()=>window.removeEventListener('sentinel:keyUsed',h);
+  },[user]);
 
   const addEvent=useCallback((desc,suspicious=false)=>{
     setBehaviorEvents(prev=>[{desc,time:Date.now(),suspicious},...prev].slice(0,60));
@@ -1476,7 +1629,9 @@ export default function App(){
       <ParticleCanvas/>
       {showBanner&&<SuspiciousBanner onDismiss={()=>setShowBanner(false)} onVerify={()=>setShowVerify(true)}/>}
       {showVerify&&<VerifyIdentityModal user={user} onVerified={()=>{addEvent("Identity re-verified — session marked secure");setBehaviorStatus("normal");setShowBanner(false);}} onClose={()=>setShowVerify(false)}/>}
-      <Sidebar active={page} onNav={setPage} user={user} onLogout={handleLogout} unreadEmails={unreadEmails}/>
+      {realtimeAlerts.map((ev,i)=> user&&user.id===ev.ownerId && <RealTimeAlertPopup key={ev.id} ev={ev} onClose={()=>setRealtimeAlerts(r=>r.filter(x=>x.id!==ev.id))} onRevoke={(k)=>{AccessKeyEngine.revoke(k); setRealtimeAlerts(r=>r.filter(x=>x.key!==k)); setSessionAlerts(prev=>[{desc:`Access key revoked: ${k}`,severity:"High",time:Date.now(),status:"Revoked"},...prev]);}} onMarkSafe={(e)=>{const evs=JSON.parse(localStorage.getItem("sentinel_key_events")||"[]"); const idx=evs.findIndex(x=>x.id===e.id); if(idx!==-1){evs[idx].markedSafe=true; localStorage.setItem("sentinel_key_events",JSON.stringify(evs));} setRealtimeAlerts(r=>r.filter(x=>x.id!==e.id)); setSessionAlerts(prev=>[{desc:`Key use marked safe: ${e.key}`,severity:"Low",time:Date.now(),status:"Safe"},...prev]);}} onAllow={(e)=>{setRealtimeAlerts(r=>r.filter(x=>x.id!==e.id)); setSessionAlerts(prev=>[{desc:`Key use allowed: ${e.key}`,severity:"Low",time:Date.now(),status:"Allowed"},...prev]);}} />)}
+      <Sidebar active={page} onNav={setPage} user={user} onLogout={handleLogout} unreadEmails={unreadEmails} onSimulateOpen={()=>setShowSimulate(true)}/>
+      {showSimulate&&<SimulateKeyModal onClose={()=>setShowSimulate(false)}/>} 
       <div className="main-content" style={{paddingTop:showBanner?72:30}}>
         {page==="dashboard"&&<DashboardPage user={user} riskScore={riskScore} sessionAlerts={sessionAlerts} behaviorStatus={behaviorStatus} onVerifyIdentity={()=>setShowVerify(true)}/>}
         {page==="monitoring"&&<MonitoringPage events={behaviorEvents} behaviorStatus={behaviorStatus} riskScore={riskScore} onVerifyIdentity={()=>setShowVerify(true)}/>}
