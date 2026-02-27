@@ -98,15 +98,12 @@ fetch(`${API_URL}/api/auth/login`, { ... })
 fetch(`${API_URL}/api/auth/signup`, { ... })
 ```
 
-### 4. Free MongoDB Atlas (5 min)
+### 4. Database (optional – lowdb fallback means no cost)
 
-```bash
-# Visit mongodb.com/cloud/atlas
-# Create free account
-# Create free M0 cluster
-# Get connection string: mongodb+srv://user:pass@cluster.mongodb.net
-# Add to Render environment variables
-```
+If you want to avoid any paid database, skip this step entirely. The backend automatically uses a file-based JSON store (lowdb) when the `MONGODB_URI` environment variable is **not** set. Render keeps the data file between restarts, making it ideal for a hackathon demo.
+
+If you still prefer MongoDB Atlas, you may create a cluster with free credits (M10 or higher); simply put the connection string into the `MONGODB_URI` environment variable on Render. No action is required here for the demo.
+
 
 ### 5. Free Mailgun Account (10 min)
 
