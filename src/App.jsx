@@ -1618,6 +1618,19 @@ export default function App(){
     }
   },[]);
 
+  // Initialize EmailJS public key (store in localStorage if not present)
+  useEffect(()=>{
+    try{
+      const existing = localStorage.getItem('emailjs_public_key');
+      const provided = 'YvYEzWrnqPNl0vRZS';
+      const key = existing||provided;
+      if(key) {
+        localStorage.setItem('emailjs_public_key', key);
+        try{ emailjs.init(key); }catch(e){}
+      }
+    }catch(e){console.warn('EmailJS init failed',e);}    
+  },[]);
+
   // Listen for key-used events dispatched by AccessKeyEngine
   useEffect(()=>{
     const h=(e)=>{
