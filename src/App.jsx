@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from "react";
+import emailjs from '@emailjs/browser';
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 const rand = (a, b) => Math.floor(Math.random() * (b - a + 1)) + a;
@@ -39,6 +40,23 @@ const EmailEngine = {
     const msg = { id: Date.now()+rand(0,999), to, subject, body, type, time: Date.now(), read: false };
     emails.unshift(msg);
     localStorage.setItem("sentinel_emails", JSON.stringify(emails.slice(0,50)));
+    // Attempt to send real email via EmailJS if configured
+    try{
+      const publicKey = localStorage.getItem('emailjs_public_key');
+      const serviceId = 'service_dl5mmsr';
+      const templateId = 'template_dead8ln';
+      if(publicKey){
+        const templateParams = {
+          to_email: to,
+          subject,
+          body_html: body,
+          timestamp: new Date().toLocaleString()
+        };
+        emailjs.send(serviceId, templateId, templateParams, publicKey).then(()=>{
+          console.log('EmailJS: message sent to', to);
+        },(err)=>{console.warn('EmailJS error', err);});
+      }
+    }catch(e){console.warn('Email send failed',e);}    
     return msg;
   },
   getAll(email) {
