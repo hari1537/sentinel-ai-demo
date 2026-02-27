@@ -1,5 +1,29 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import emailjs from '@emailjs/browser';
+import CryptoJS from 'crypto-js';
+
+// ─── Encryption Utilities (AES-256) ────────────────────────────────────────
+const ENCRYPTION_SECRET = 'sentinel-ai-aes-256-key-' + Date.now().toString().slice(-6);
+const CryptoEngine = {
+  encrypt(data) {
+    try {
+      return CryptoJS.AES.encrypt(
+        typeof data === 'string' ? data : JSON.stringify(data),
+        ENCRYPTION_SECRET
+      ).toString();
+    } catch (err) { console.error('Encrypt error:', err); return null; }
+  },
+  decrypt(encrypted) {
+    try {
+      const bytes = CryptoJS.AES.decrypt(encrypted, ENCRYPTION_SECRET);
+      const decrypted = bytes.toString(CryptoJS.enc.Utf8);
+      return decrypted.startsWith('{') ? JSON.parse(decrypted) : decrypted;
+    } catch (err) { console.error('Decrypt error:', err); return null; }
+  },
+  hash(data) {
+    return CryptoJS.SHA256(typeof data === 'string' ? data : JSON.stringify(data)).toString();
+  }
+};
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 const rand = (a, b) => Math.floor(Math.random() * (b - a + 1)) + a;
