@@ -14,22 +14,38 @@ const fmtDT = (d) => new Date(d).toLocaleString();
 const hexStr = (n) => Array.from({length:n},()=>"0123456789ABCDEF"[rand(0,15)]).join("");
 const genCodes = () => Array.from({length:8},()=>`${hexStr(4)}-${hexStr(4)}-${hexStr(4)}`);
 
-// ─── Device Tracker (simulated — recognize new devices per user) ──────────
+// ─── Device Tracker (stable fingerprinting per browser) ──────────────────
 const DeviceTracker = {
-  register(userId, device) {
+  // Generate a stable browser fingerprint (consistent across page reloads)
+  generateFingerprint() {
+    const nav = navigator;
+    const screen_res = `${window.screen.width}x${window.screen.height}`;
+    const ua = nav.userAgent.substring(0, 50); // consistent user agent
+    const lang = nav.language;
+    const tz = new Date().getTimezoneOffset();
+    // Simple hash: concatenate fingerprint components
+    // In real app, use FingerprintJS or similar
+    return `fp_${ua}_${screen_res}_${lang}_${tz}`.replace(/[\s\/]/g, '_');
+  },
+  isNewDevice(userId) {
     const devices = JSON.parse(localStorage.getItem("sentinel_devices")||"[]");
-    const key = `${userId}-${device}`;
-    if(!devices.find(d=>d.key===key)) {
-      devices.unshift({key, userId, device, time: Date.now()});
+    const fp = DeviceTracker.generateFingerprint();
+    const key = `${userId}-${fp}`;
+    return !devices.find(d => d.key === key);
+  },
+  register(userId) {
+    const devices = JSON.parse(localStorage.getItem("sentinel_devices")||"[]");
+    const fp = DeviceTracker.generateFingerprint();
+    const key = `${userId}-${fp}`;
+    if(!devices.find(d => d.key === key)) {
+      const device = genDevice();
+      const ip = genIP();
+      const loc = genLocation();
+      devices.unshift({key, userId, device, ip, loc, fingerprint: fp, registered: Date.now()});
       localStorage.setItem("sentinel_devices", JSON.stringify(devices));
-      return {isNew: true};
+      return {isNew: true, device, ip, loc};
     }
     return {isNew: false};
-  },
-  isNewDevice(userId){
-    // simulate: for demo, treat each login as potentially from a "new device" 
-    // unless they're the demo user logging in from a previously-seen device
-    return true; // always treat as new for non-demo users or first-time device
   }
 };
 
@@ -863,13 +879,12 @@ function LoginPage({onLogin,onGoSignup}){
       setLoading(false);
       if(!user) return setErr("Invalid credentials. Please check your email and password.");
       
-      // for non-demo users, send automatic device login notification email
+      // for non-demo users, send automatic device login notification email ONLY if new device
       if(user.email!=="demo@sentinel.ai"){
-        const device = genDevice();
-        const ip = genIP();
-        const loc = genLocation();
-        Emails.newDeviceLogin(user.email, device, ip, loc, ts());
-        DeviceTracker.register(user.id, device);
+        const deviceInfo = DeviceTracker.register(user.id);
+        if(deviceInfo.isNew){
+          Emails.newDeviceLogin(user.email, deviceInfo.device, deviceInfo.ip, deviceInfo.loc, ts());
+        }
       }
       
       onLogin(user);
@@ -1483,6 +1498,9 @@ function SettingsPage({user,onUpdateUser}){
   const [err,setErr]=useState("");
   const [success,setSuccess]=useState("");
   const [toggles,setToggles]=useState({twofa:true,emailAlerts:true,aiMonitor:true,deviceFingerprint:true,geoVerify:false,sessionRecord:false});
+  const [emailKey,setEmailKey]=useState(localStorage.getItem('emailjs_public_key')||"");
+  const [testRecipient,setTestRecipient]=useState("");
+  const [testStatus,setTestStatus]=useState("");
 
   const showSuccess=(m)=>{setSuccess(m);setTimeout(()=>setSuccess(""),3000);};
 
@@ -1509,6 +1527,25 @@ function SettingsPage({user,onUpdateUser}){
   const toggle=(k)=>setToggles(t=>({...t,[k]:!t[k]}));
 
   const exportAccountData=()=>FileEngine.downloadReport("Account Data",{name:user.name,email:user.email,org:user.org,joined:fmtDT(user.joined),files:user.files?.length,alerts:user.alerts?.length});
+
+  const saveEmailKey=()=>{
+    try{ localStorage.setItem('emailjs_public_key', emailKey); emailjs.init(emailKey); setTestStatus('Public key saved'); setTimeout(()=>setTestStatus(''),2500);}catch(e){setTestStatus('Failed to save key');}
+  };
+
+  const sendTestEmail=async()=>{
+    setTestStatus('Sending...');
+    const serviceId = 'service_dl5mmsr';
+    const templateId = 'template_dead8ln';
+    const publicKey = localStorage.getItem('emailjs_public_key')||emailKey;
+    if(!publicKey){ setTestStatus('No public key set'); return; }
+    try{
+      const params = { to_email: testRecipient || user.email, subject: 'SentinelAI Test Email', body_html: 'This is a test email from SentinelAI', timestamp: new Date().toLocaleString() };
+      const res = await emailjs.send(serviceId, templateId, params, publicKey);
+      console.log('EmailJS test res', res);
+      setTestStatus('Sent — check inbox (or spam)');
+    }catch(e){ console.error('EmailJS test error', e); setTestStatus('Send failed — check console'); }
+    setTimeout(()=>setTestStatus(''),4000);
+  };
 
   return(
     <div className="fade-in">
@@ -1551,6 +1588,19 @@ function SettingsPage({user,onUpdateUser}){
       )}
       {tab==="data"&&(
         <div style={{display:"flex",flexDirection:"column",gap:14}}>
+          <div className="glass" style={{padding:20,marginBottom:14}}>
+            <div style={{fontWeight:600,marginBottom:8}}>EmailJS Settings & Test</div>
+            <div style={{fontSize:".82rem",color:"var(--muted)",marginBottom:8}}>Save your EmailJS Public Key and send a test email to verify delivery.</div>
+            <div style={{display:"flex",gap:8,marginBottom:8}}>
+              <input className="input" placeholder="EmailJS Public Key" value={emailKey} onChange={e=>setEmailKey(e.target.value)} style={{flex:1}} />
+              <button className="btn btn-primary" onClick={saveEmailKey}>Save Key</button>
+            </div>
+            <div style={{display:"flex",gap:8,marginBottom:8}}>
+              <input className="input" placeholder="Test recipient email (optional)" value={testRecipient} onChange={e=>setTestRecipient(e.target.value)} style={{flex:1}} />
+              <button className="btn btn-success" onClick={sendTestEmail}>Send Test Email</button>
+            </div>
+            {testStatus&&<div style={{fontSize:".82rem",color:"var(--muted)"}}>{testStatus}</div>}
+          </div>
           <div className="glass" style={{padding:20}}>
             <div style={{fontWeight:600,marginBottom:4}}>Export Account Data</div>
             <div style={{fontSize:".82rem",color:"var(--muted)",marginBottom:14}}>Download a copy of your account information and security settings.</div>
