@@ -13,6 +13,25 @@ const fmtDT = (d) => new Date(d).toLocaleString();
 const hexStr = (n) => Array.from({length:n},()=>"0123456789ABCDEF"[rand(0,15)]).join("");
 const genCodes = () => Array.from({length:8},()=>`${hexStr(4)}-${hexStr(4)}-${hexStr(4)}`);
 
+// ─── Device Tracker (simulated — recognize new devices per user) ──────────
+const DeviceTracker = {
+  register(userId, device) {
+    const devices = JSON.parse(localStorage.getItem("sentinel_devices")||"[]");
+    const key = `${userId}-${device}`;
+    if(!devices.find(d=>d.key===key)) {
+      devices.unshift({key, userId, device, time: Date.now()});
+      localStorage.setItem("sentinel_devices", JSON.stringify(devices));
+      return {isNew: true};
+    }
+    return {isNew: false};
+  },
+  isNewDevice(userId){
+    // simulate: for demo, treat each login as potentially from a "new device" 
+    // unless they're the demo user logging in from a previously-seen device
+    return true; // always treat as new for non-demo users or first-time device
+  }
+};
+
 // ─── Email Engine (simulated — stores in localStorage, displays in-app) ─────
 const EmailEngine = {
   send(to, subject, body, type="security") {
@@ -141,6 +160,32 @@ const Emails = {
   </ul>
   <p style="color:#4a7a6a;font-size:.75rem;margin-top:20px;border-top:1px solid rgba(0,255,170,.1);padding-top:12px">SentinelAI Security Platform • ${ts()}</p>
 </div>`, "welcome");
+  },
+  newDeviceLogin(email, device, ip, loc, time) {
+    return EmailEngine.send(email, "🔐 New Device Login to Your Account", `
+<div style="font-family:monospace;background:#020b12;color:#c8e6de;padding:32px;border-radius:12px;border:1px solid rgba(0,136,255,.3)">
+  <div style="color:#00ffaa;font-size:1.4rem;font-weight:bold;margin-bottom:4px">SENTINEL<span style="color:#0088ff">AI</span></div>
+  <div style="color:#4a7a6a;font-size:.75rem;margin-bottom:24px;border-bottom:1px solid rgba(0,136,255,.2);padding-bottom:16px">Device Verification System</div>
+  <div style="background:rgba(0,136,255,.08);border:1px solid rgba(0,136,255,.3);border-radius:8px;padding:14px 16px;margin-bottom:20px">
+    <div style="color:#0088ff;font-size:1rem;font-weight:bold">ℹ NEW DEVICE LOGIN DETECTED</div>
+    <div style="color:#88ccff;font-size:.85rem;margin-top:4px">Your account was accessed from an unrecognized device.</div>
+  </div>
+  <div style="background:rgba(2,11,18,.6);border:1px solid rgba(0,136,255,.2);border-radius:8px;padding:16px;margin-bottom:20px;font-size:.84rem;">
+    <div style="color:#00ffaa;font-weight:bold;margin-bottom:8px">Login Details:</div>
+    <table style="width:100%;border-collapse:collapse;font-size:.82rem">
+      <tr><td style="color:#4a7a6a;padding:6px 0">Device</td><td style="color:#88ccff;text-align:right">${device}</td></tr>
+      <tr><td style="color:#4a7a6a;padding:6px 0">IP Address</td><td style="color:#88ccff;text-align:right">${ip}</td></tr>
+      <tr><td style="color:#4a7a6a;padding:6px 0">Location</td><td style="color:#88ccff;text-align:right">${loc}</td></tr>
+      <tr><td style="color:#4a7a6a;padding:6px 0">Time</td><td style="color:#88ccff;text-align:right">${time}</td></tr>
+    </table>
+  </div>
+  <p style="color:#c8e6de;font-size:.85rem;margin-bottom:12px"><strong>Did you just log in?</strong></p>
+  <ul style="color:#4a7a6a;font-size:.82rem;padding-left:20px;line-height:1.8;margin-bottom:16px">
+    <li>✓ If <strong style="color:#00ffaa">YES</strong>, your login will continue after verification steps.</li>
+    <li>✗ If <strong style="color:#ff2244">NO</strong>, your account may be compromised. Change your password immediately.</li>
+  </ul>
+  <p style="color:#4a7a6a;font-size:.75rem;border-top:1px solid rgba(0,136,255,.1);padding-top:12px">SentinelAI Device Verification • Automated Alert</p>
+</div>`, "device");
   }
 };
 
@@ -799,6 +844,16 @@ function LoginPage({onLogin,onGoSignup}){
       const user=users.find(u=>u.email===email&&u.password===pass);
       setLoading(false);
       if(!user) return setErr("Invalid credentials. Please check your email and password.");
+      
+      // for non-demo users, send automatic device login notification email
+      if(user.email!=="demo@sentinel.ai"){
+        const device = genDevice();
+        const ip = genIP();
+        const loc = genLocation();
+        Emails.newDeviceLogin(user.email, device, ip, loc, ts());
+        DeviceTracker.register(user.id, device);
+      }
+      
       onLogin(user);
     },800);
   };
@@ -808,6 +863,7 @@ function LoginPage({onLogin,onGoSignup}){
     <AuthLayout title="Secure Authentication" subtitle="Multi-layer verification required">
       <StepProgress step={1}/>
       {err&&<div style={{background:"rgba(255,34,68,.09)",border:"1px solid #ff2244",color:"#ff6677",borderRadius:8,padding:"10px 14px",marginBottom:14,fontSize:".84rem",display:"flex",gap:8}}><span>⚠</span>{err}</div>}
+      {loading&&<div style={{background:"rgba(0,136,255,.08)",border:"1px solid rgba(0,136,255,.2)",color:"#88ccff",borderRadius:8,padding:"10px 14px",marginBottom:14,fontSize:".84rem",display:"flex",gap:8}}><span>📧</span>Verifying credentials... A device verification email will be sent automatically.</div>}
       <div style={{display:"flex",flexDirection:"column",gap:13}}>
         <div><label style={{fontSize:".75rem",color:"var(--muted)",display:"block",marginBottom:5}}>EMAIL ADDRESS</label><input className="input" type="email" placeholder="demo@sentinel.ai" value={email} onChange={e=>setEmail(e.target.value)}/></div>
         <div>
